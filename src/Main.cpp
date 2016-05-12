@@ -19,7 +19,9 @@
 
 #include <cstdlib>
 
+using narwhal::Vec2f;
 using narwhal::Vec3f;
+using narwhal::Vec4f;
 using narwhal::Mat4f;
 
 void ui() {
@@ -36,12 +38,11 @@ struct Triangle {
 };
 
 struct GridVisShader {
-    static const GLuint a_vertex{ 1u };
+    static const GLuint a_vertex{ 2u };
 };
 
 struct Vertex {
     narwhal::Vec3f position;
-    float          scalar;
 };
 
 int main() {
@@ -77,9 +78,9 @@ int main() {
     });
 
     //TODO: get rid of hard-coded constants
-    const int resx = 300;
-    const int resy = 225;
-    const float h = 0.1f;
+    const unsigned int resx = 300*2;
+    const unsigned int resy = 225*2;
+    const float h = 0.01f;
     /***
     *       ______           __
     *      / __/ /  ___ ____/ /__ _______
@@ -107,13 +108,16 @@ int main() {
     *    /____/\_,_/_//_/ \__/_/ /___/
     *
     */
-    narwhal::DynamicArray<Triangle> indices(resx*resy);
     narwhal::BufferObject indexBuffer{ GL_ELEMENT_ARRAY_BUFFER };
-    narwhal::BufferObject vertexBuffer{ GL_ARRAY_BUFFER };
+    narwhal::BufferObject rdBuffer1{ GL_ARRAY_BUFFER };
+    narwhal::BufferObject rdBuffer2{ GL_ARRAY_BUFFER };
+    narwhal::Texture rdTexture1{ GL_TEXTURE_BUFFER };
+    narwhal::Texture rdTexture2{ GL_TEXTURE_BUFFER };
     GLuint gridArray = 0u;
     {
         const GLuint m = resx;
         const GLuint n = resy;
+        narwhal::DynamicArray<Triangle> indices(resx*resy);
 
         for (GLuint i = 0; i < n - 1u; ++i) {
             for (GLuint j = 0; j < m - 1u; ++j) {
@@ -123,24 +127,29 @@ int main() {
         }
         indexBuffer.dataStore(indices.size()*3, sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
 
-        narwhal::DynamicArray<Vertex> vertices(m*n);
-        const float max = float(m + n);
-        for (GLuint i = 0; i < n; ++i) {
-            for (GLuint j = 0; j < m; ++j) {
-                vertices.pushBack(Vertex{ Vec3f{h*j, h*i, -1.f}, (i + j) / max });
+        float max = float(m*n - 1);
+        narwhal::DynamicArray<Vec4f> rdGrid(m*n);
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < m; ++j) {
+                float scalar = float(i*m + j);
+                rdGrid.pushBack(Vec4f{h*j, h*i, scalar / max, scalar / max });
             }
         }
-        NARWHAL_ASSERT(vertices.size() != 0u);
-        vertexBuffer.dataStore(vertices.size(), sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+        rdBuffer1.dataStore(rdGrid.size(), sizeof(Vec4f), rdGrid.data(), GL_DYNAMIC_COPY);
+        rdBuffer2.dataStore(rdGrid.size(), sizeof(Vec4f), rdGrid.data(), GL_DYNAMIC_COPY);
+        rdTexture1.setStore(GL_RGBA32F, rdBuffer1);
+        rdTexture2.setStore(GL_RGBA32F, rdBuffer2);
 
-        vertexBuffer.bind();
+        rdBuffer1.bind();
+        indexBuffer.bind();
         glGenVertexArrays(1, &gridArray);
         NARWHAL_ASSERT(gridArray != 0u);
         glBindVertexArray(gridArray);
         glVertexAttribPointer(GridVisShader::a_vertex, 4, GL_FLOAT, GL_FALSE, 0, 0);
         glEnableVertexAttribArray(GridVisShader::a_vertex);
         glBindVertexArray(0u);
-        vertexBuffer.unbind();
+        indexBuffer.unbind();
+        rdBuffer1.unbind();
     }
 
     /***
@@ -150,8 +159,8 @@ int main() {
     *    /_/  /_/\_,_/\__/_/ /_/\__/\__/___/
     *
     */
-    Mat4f ortho = Mat4f::orthographic(h*resx-h, h*resy-h, 0.f, 2.f);
-    Mat4f model = Mat4f::translation(Vec3f(-0.5f*h*resx, -0.5*h*resy, 0.f));
+    Mat4f ortho = Mat4f::orthographic(h*(resx-1), h*(resy-1), 0.f, 2.f);
+    Mat4f model = Mat4f::translation(Vec3f(-0.5f*h*resx + 0.5f*h, -0.5f*h*resy + 0.5f*h, 0.f));
 
     /***
     *       __
@@ -185,13 +194,14 @@ int main() {
 
         // rendering magic goes here
         glBindVertexArray(gridArray);
-
+        indexBuffer.bind();
         gridVisShader.use();
         gridVisShader.setUniform("u_PV", ortho);
         gridVisShader.setUniform("u_M", model);
 
-        glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, indices.data());
+        glDrawElements(GL_TRIANGLES, indexBuffer.count(), GL_UNSIGNED_INT, 0);
 
+        indexBuffer.unbind();
         glBindVertexArray(0u);
         gridVisShader.stopUsing();
 
