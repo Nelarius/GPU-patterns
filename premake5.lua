@@ -28,17 +28,22 @@ workspace "turing-patterns"
         --This should be enabled once all VC warnings get fixed:
         --flags { "FatalWarnings" } // This should be enabled once all VC warnings get fixed
         postbuildcommands {
-            "{MKDIR} %{cfg.targetdir}/data",
             "{COPY} ../extern/SDL/bin/SDL2.dll %{cfg.targetdir}", "{COPY} ../extern/assimp/bin/assimp.dll %{cfg.targetdir}",
             "{COPY} ../extern/glew-1.13.0/bin/glew32.dll %{cfg.targetdir}", "{COPY} ../data %{cfg.targetdir}/data",
             "{COPY} ../config.json %{cfg.targetdir}"
         }
+        filter "files:**glsl"
+            buildcommands { "{COPY} ../data/%{file.name} %{cfg.targetdir}/data" }
+            buildoutputs { "%{cfg.targetdir}/data/%{file.name}" }
         configuration "vs*"
             defines { "_CRT_SECURE_NO_WARNINGS" } -- This is to turn off warnings about 'localtime'
             links { "SDL2", "assimp", "glew32", "opengl32"  }
             libdirs {
                 "extern/SDL/lib", "extern/assimp/lib",
                 "extern/glew-1.13.0/lib"
+            }
+            prebuildcommands {
+                "if not exist \"..\\bin\\data\" mkdir ..\\bin\\data"
             }
         filter "configurations:Debug"
             kind "ConsoleApp"
