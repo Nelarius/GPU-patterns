@@ -263,9 +263,9 @@ struct Matrix4 {
     static Matrix4<T> orthographic(T width, T height, T near, T far) {
         return Matrix4<T>{
             T(2.0 / width), T(0.0), T(0.0), T(0.0),
-                T(0.0), T(2.0) / height, T(0.0), T(0.0),
-                T(0.0), T(0.0), T(2.0) / (near - far), (near + far) / (near - far),
-                T(0.0), T(0.0), T(0.0), T(1.0)
+            T(0.0), T(2.0) / height, T(0.0), T(0.0),
+            T(0.0), T(0.0), T(2.0) / (near - far), (near + far) / (near - far),
+            T(0.0), T(0.0), T(0.0), T(1.0)
         };
     }
 
