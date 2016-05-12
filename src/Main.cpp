@@ -1,8 +1,6 @@
 #include "ImGuiRenderer.h"
 #include "MouseManager.h"
 #include "KeyboardManager.h"
-#include "Renderer.h"
-#include "SceneManager.h"
 #include "Window.h"
 #include "common/Array.h"
 #include "common/Clock.h"
@@ -21,17 +19,9 @@
 
 using narwhal::Vec2f;
 using narwhal::Vec3f;
+using narwhal::Vec3i;
 using narwhal::Vec4f;
 using narwhal::Mat4f;
-
-void ui() {
-    ImGui::Begin("Test window");
-    if (ImGui::TreeNode("Settings")) {
-        // asdf asdf
-        ImGui::TreePop();
-    }
-    ImGui::End();
-}
 
 struct Triangle {
     GLuint i, j, k;
@@ -44,6 +34,25 @@ struct GridVisShader {
 struct Vertex {
     narwhal::Vec3f position;
 };
+
+struct Parameters {
+    float timeFactor{0.01f};
+    float diffusivity{0.0015f};
+    float inhibitorCoupling{0.1f};
+    float activatorCoupling{0.1f};
+    float inhibitorBaseProduction{0.1f};
+    float activatorBaseProduction{0.1f};
+};
+
+void ui(Parameters& params) {
+    ImGui::Begin("Test window");
+
+    ImGui::SliderFloat("time factor", &params.timeFactor, 0.01f, 5.0f);
+    ImGui::SliderFloat("diffusivity", &params.diffusivity, 0.01f, 5.0f);
+    ImGui::SliderFloat("activator base production", &params.activatorBaseProduction, 0.01f, 5.f);
+
+    ImGui::End();
+}
 
 int main() {
     auto config = narwhal::fileToString("config.json");
@@ -78,9 +87,16 @@ int main() {
     });
 
     //TODO: get rid of hard-coded constants
-    const unsigned int resx = 300*2;
-    const unsigned int resy = 225*2;
+    // these must be divisible by four
+    const unsigned int resx = 900;
+    const unsigned int resy = 1200;
+    const float diffusivity = 0.0016f;
     const float h = 0.01f;
+    const float inhCoupling = 0.1f;
+    const float actCoupling = 0.1f;
+    const float inhBaseProduction = 0.1f;
+    const float actBaseProduction = 0.1f;
+    const float timeFactor = 0.01f;
     /***
     *       ______           __
     *      / __/ /  ___ ____/ /__ _______
@@ -88,7 +104,7 @@ int main() {
     *    /___/_//_/\_,_/\_,_/\__/_/ /___/
     *
     */
-    narwhal::Program gridVisShader, clearShader, computeShader;
+    narwhal::Program gridVisShader, clearShader, bulkShader, synchronizeShader;
     {
         narwhal::DynamicArray<narwhal::Shader> shaders;
         shaders.emplaceBack(narwhal::fileToString("data/grid.vert.glsl"), GL_VERTEX_SHADER);
@@ -96,8 +112,12 @@ int main() {
         gridVisShader.link(shaders);
         shaders.clear();
 
-        shaders.emplaceBack(narwhal::fileToString("data/clear.comp.glsl"), GL_COMPUTE_SHADER);
-        clearShader.link(shaders);
+        shaders.emplaceBack(narwhal::fileToString("data/bulk.comp.glsl"), GL_COMPUTE_SHADER);
+        bulkShader.link(shaders);
+        shaders.clear();
+
+        shaders.emplaceBack(narwhal::fileToString("data/synchronize.comp.glsl"), GL_COMPUTE_SHADER);
+        synchronizeShader.link(shaders);
         shaders.clear();
     }
 
@@ -109,10 +129,10 @@ int main() {
     *
     */
     narwhal::BufferObject indexBuffer{ GL_ELEMENT_ARRAY_BUFFER };
-    narwhal::BufferObject rdBuffer1{ GL_ARRAY_BUFFER };
-    narwhal::BufferObject rdBuffer2{ GL_ARRAY_BUFFER };
-    narwhal::Texture rdTexture1{ GL_TEXTURE_BUFFER };
-    narwhal::Texture rdTexture2{ GL_TEXTURE_BUFFER };
+    narwhal::BufferObject rdBuffer{ GL_ARRAY_BUFFER };
+    narwhal::BufferObject rdBufferPrevious{ GL_ARRAY_BUFFER };
+    narwhal::Texture rdTexture{ GL_TEXTURE_BUFFER };
+    narwhal::Texture rdTexturePrevious{ GL_TEXTURE_BUFFER };
     GLuint gridArray = 0u;
     {
         const GLuint m = resx;
@@ -135,12 +155,12 @@ int main() {
                 rdGrid.pushBack(Vec4f{h*j, h*i, scalar / max, scalar / max });
             }
         }
-        rdBuffer1.dataStore(rdGrid.size(), sizeof(Vec4f), rdGrid.data(), GL_DYNAMIC_COPY);
-        rdBuffer2.dataStore(rdGrid.size(), sizeof(Vec4f), rdGrid.data(), GL_DYNAMIC_COPY);
-        rdTexture1.setStore(GL_RGBA32F, rdBuffer1);
-        rdTexture2.setStore(GL_RGBA32F, rdBuffer2);
+        rdBuffer.dataStore(rdGrid.size(), sizeof(Vec4f), rdGrid.data(), GL_DYNAMIC_COPY);
+        rdBufferPrevious.dataStore(rdGrid.size(), sizeof(Vec4f), rdGrid.data(), GL_DYNAMIC_COPY);
+        rdTexture.setStore(GL_RGBA32F, rdBuffer);
+        rdTexturePrevious.setStore(GL_RGBA32F, rdBufferPrevious);
 
-        rdBuffer1.bind();
+        rdBuffer.bind();
         indexBuffer.bind();
         glGenVertexArrays(1, &gridArray);
         NARWHAL_ASSERT(gridArray != 0u);
@@ -149,7 +169,7 @@ int main() {
         glEnableVertexAttribArray(GridVisShader::a_vertex);
         glBindVertexArray(0u);
         indexBuffer.unbind();
-        rdBuffer1.unbind();
+        rdBuffer.unbind();
     }
 
     /***
@@ -170,6 +190,7 @@ int main() {
     *                  /_/
     */
     bool running = true;
+    Parameters params{};
     narwhal::Clock clock;
     while (running) {
         clock.update();
@@ -184,13 +205,42 @@ int main() {
         imgui.newFrame(clock.deltaSeconds(), mouse.coords().x, mouse.coords().y);
 
         if (showGui) {
-            ui();
+            ui(params);
         }
 
         // computation magic goes here
+        const unsigned int localGroupSize = 4u;
+        const unsigned int numLocalGroupsX = resx / localGroupSize;
+        const unsigned int numLocalGroupsY = resy / localGroupSize;
+        bulkShader.use();
+        glBindImageTexture(1, rdTexture.object(),         0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+        glBindImageTexture(2, rdTexturePrevious.object(), 0, GL_TRUE, 0, GL_READ_ONLY, GL_RGBA32F);
+        glUniform1i(3, resx);
+        glUniform1i(4, resy);
+        glUniform1f(5, params.diffusivity);
+        glUniform1f(6, h);
+        glUniform1f(7, 0.1f);
+        glUniform1f(8, inhCoupling);
+        glUniform1f(9, actCoupling);
+        glUniform1f(10, inhBaseProduction);
+        glUniform1f(11, params.activatorBaseProduction);
+        glUniform1f(12, params.timeFactor);
+
+        glDispatchCompute(numLocalGroupsX, numLocalGroupsY, 1);
+        bulkShader.stopUsing();
+
+        //glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        synchronizeShader.use();
+        glBindImageTexture(1, rdTexture.object(),         0, GL_TRUE, 0, GL_READ_ONLY, GL_RGBA32F);
+        glBindImageTexture(2, rdTexturePrevious.object(), 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+        glUniform1i(3, resx);
+        glDispatchCompute(numLocalGroupsX, numLocalGroupsY, 1);
+        synchronizeShader.stopUsing();
+
+        //glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        imgui.render();
 
         // rendering magic goes here
         glBindVertexArray(gridArray);
@@ -205,6 +255,7 @@ int main() {
         glBindVertexArray(0u);
         gridVisShader.stopUsing();
 
+        imgui.render();
         window.display();
     }
 
