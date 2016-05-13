@@ -4,7 +4,7 @@ in float v_scalar;
 out vec4 fragColor;
 
 vec4 shortRainbow( float scalar ) {	//scalar must be normalized
-    // scalar /= 10.0;
+    scalar /= 5.0;
     scalar = clamp(scalar, 0.0, 1.0);
     vec3 color = vec3( 0.0, 0.0, 0.0 );
     if ( scalar >= 0.0 && scalar < 0.25 ) {
@@ -25,6 +25,7 @@ vec4 shortRainbow( float scalar ) {	//scalar must be normalized
 
 vec4 longRainbow( float scalar ) {
     vec3 color = vec3( 0.0, 0.0, 0.0 );
+    scalar = clamp(scalar, 0.0, 1.0);
     if ( scalar >= 0.0 && scalar < 0.1666 ) {
         color.g = scalar * 6.0;
         color.b = 1.0;

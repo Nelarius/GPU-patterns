@@ -1,4 +1,5 @@
-#pragma once
+#ifndef RANDOM_H_INCLUDED
+#define RANDOM_H_INCLUDED
 
 #include <cstdint>
 
@@ -29,3 +30,5 @@ double randd(double a, double b);
 /// \brief Ger a random number in [ 0, 1 ).
 double randd();
 }
+
+#endif // RANDOM_H_INCLUDED

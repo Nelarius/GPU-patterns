@@ -30,7 +30,7 @@ void main() {
     int right = int(gl_GlobalInvocationID.y*u_width + gl_GlobalInvocationID.x + 1);
 
     vec4 newElement = imageLoad(rdGridPrevious, index);
-    
+
     float act = newElement.z;
     float actTop = imageLoad(rdGridPrevious, top).z;
     float actBottom = imageLoad(rdGridPrevious, bottom).z;
@@ -43,11 +43,11 @@ void main() {
     float inhLeft = imageLoad(rdGridPrevious, left).w;
     float inhRight = imageLoad(rdGridPrevious, right).w;
 
-    float actNew = act + u_timeFactor * u_deltaTime * ( (u_actDiffusivity/(u_deltaSpace*u_deltaSpace)) * (actRight + actLeft + actTop + actBottom - 4*act) + u_actCoupling*(act*act / inh - act) + u_actBaseProduction);
+    float actNew = act + u_timeFactor * u_deltaTime * ( (u_actDiffusivity/(u_deltaSpace*u_deltaSpace)) * (actRight + actLeft + actTop + actBottom - 4*act) + u_actCoupling*((act*act / inh) - act) + u_actBaseProduction);
 
     float inhNew = inh + u_timeFactor * u_deltaTime * ( (u_inhDiffusivity/(u_deltaSpace*u_deltaSpace)) * (inhRight + inhLeft + inhTop + inhBottom - 4*inh) + u_inhCoupling * (act*act - inh) + u_inhBaseProduction );
 
-    newElement.z = actNew;
-    newElement.w = inhNew;
+    newElement.z = actNew, 0.0, 100.0;
+    newElement.w = inhNew, 0.0, 100.0;
     imageStore(rdGrid, index, newElement);
 }

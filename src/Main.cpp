@@ -6,6 +6,7 @@
 #include "common/Clock.h"
 #include "common/File.h"
 #include "common/Log.h"
+#include "common/Random.h"
 #include "math/Vector.h"
 #include "opengl/Program.h"
 #include "opengl/Shader.h"
@@ -19,7 +20,6 @@
 
 using narwhal::Vec2f;
 using narwhal::Vec3f;
-using narwhal::Vec3i;
 using narwhal::Vec4f;
 using narwhal::Mat4f;
 
@@ -36,30 +36,32 @@ struct Vertex {
 };
 
 struct Dot {
-    Vec3f position;
-    float radius;
+    Vec2f p;
+    float r;
 };
 
 struct Parameters {
     float timeStep{ 0.1f };
     float timeFactor{0.01f};
-    float inhibitorDiffusivity{0.002f};
-    float activatorDiffusivity{ 0.0015f };
-    float inhibitorCoupling{0.1f};
-    float activatorCoupling{0.5f};
-    float inhibitorBaseProduction{0.01f};
-    float activatorBaseProduction{0.01f};
+    float inhibitorDiffusivity{0.01f};
+    float activatorDiffusivity{ 0.021f };
+    float inhibitorCoupling{0.9f};
+    float activatorCoupling{0.9f};
+    float inhibitorBaseProduction{0.f};
+    float activatorBaseProduction{0.f};
+    bool showActivator{ true };
 };
 
 void ui(Parameters& params) {
-    ImGui::Begin("Test window");
+    ImGui::Begin("Parameters");
 
+    ImGui::Checkbox("show activator", &params.showActivator);
     ImGui::SliderFloat("time step", &params.timeStep, 0.01f, 1.0f);
     ImGui::SliderFloat("time factor", &params.timeFactor, 0.01f, 0.3f);
     ImGui::SliderFloat("inhibitor diffusivity", &params.inhibitorDiffusivity, 0.001f, 0.1f);
     ImGui::SliderFloat("activator diffusivity", &params.activatorDiffusivity, 0.001f, 0.1f);
-    ImGui::SliderFloat("inhibitor base production", &params.inhibitorBaseProduction, 0.001f, 0.1f);
-    ImGui::SliderFloat("activator base production", &params.activatorBaseProduction, 0.001f, 0.1f);
+    ImGui::SliderFloat("inhibitor base production", &params.inhibitorBaseProduction, 0.f, 0.01f);
+    ImGui::SliderFloat("activator base production", &params.activatorBaseProduction, 0.f, 0.01f);
     ImGui::SliderFloat("inhibitor coupling", &params.inhibitorCoupling, 0.01f, 1.f);
     ImGui::SliderFloat("activator coupling", &params.activatorCoupling, 0.01f, 1.f);
 
@@ -111,6 +113,8 @@ int main() {
     *
     */
     narwhal::Program gridVisShader, clearShader, bulkShader, borderShader, synchronizeShader;
+    GLuint activatorIndex = 0u;
+    GLuint inhibitorIndex = 0u;
     {
         narwhal::DynamicArray<narwhal::Shader> shaders;
         shaders.emplaceBack(narwhal::fileToString("data/grid.vert.glsl"), GL_VERTEX_SHADER);
@@ -130,6 +134,8 @@ int main() {
         synchronizeShader.link(shaders);
         shaders.clear();
     }
+    activatorIndex = glGetSubroutineIndex(gridVisShader.object(), GL_VERTEX_SHADER, "activator");
+    inhibitorIndex = glGetSubroutineIndex(gridVisShader.object(), GL_VERTEX_SHADER, "inhibitor");
 
     /***
     *       ___       ______
@@ -157,17 +163,17 @@ int main() {
         }
         indexBuffer.dataStore(indices.size()*3, sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
 
-        float radius = 0.1f*h*resy;
         float x0 = 0.5f*h*resx;
         float y0 = 0.5f*h*resy;
+        float rad = 0.08f * h * resx;
         narwhal::DynamicArray<Vec4f> rdGrid(m*n);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < m; ++j) {
                 float x = h*j;
                 float y = h*i;
-                float scalar = 0.01f;
-                if ((x - x0)*(x - x0) + (y - y0)*(y - y0) < radius*radius) {
-                    scalar = 0.9f;
+                float scalar = 0.1f;
+                if ((x - x0)*(x - x0) + (y - y0)*(y - y0) < rad*rad) {
+                    scalar = narwhal::randf(0.1f, 2.9f);
                 }
                 rdGrid.pushBack(Vec4f{h*j, h*i, scalar, scalar });
             }
@@ -254,16 +260,12 @@ int main() {
         glDispatchCompute(numLocalGroupsX, numLocalGroupsY, 1);
         borderShader.stopUsing();
 
-        //glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
         synchronizeShader.use();
         glBindImageTexture(1, rdTexture.object(),         0, GL_TRUE, 0, GL_READ_ONLY, GL_RGBA32F);
         glBindImageTexture(2, rdTexturePrevious.object(), 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA32F);
         glUniform1i(3, resx);
         glDispatchCompute(numLocalGroupsX, numLocalGroupsY, 1);
         synchronizeShader.stopUsing();
-
-        //glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -273,6 +275,8 @@ int main() {
         gridVisShader.use();
         gridVisShader.setUniform("u_PV", ortho);
         gridVisShader.setUniform("u_M", model);
+        GLuint subroutineIndex = params.showActivator ? activatorIndex : inhibitorIndex;
+        glUniformSubroutinesuiv(GL_VERTEX_SHADER, 1, &subroutineIndex);
 
         glDrawElements(GL_TRIANGLES, indexBuffer.count(), GL_UNSIGNED_INT, 0);
 
