@@ -35,21 +35,33 @@ struct Vertex {
     narwhal::Vec3f position;
 };
 
+struct Dot {
+    Vec3f position;
+    float radius;
+};
+
 struct Parameters {
+    float timeStep{ 0.1f };
     float timeFactor{0.01f};
-    float diffusivity{0.0015f};
+    float inhibitorDiffusivity{0.002f};
+    float activatorDiffusivity{ 0.0015f };
     float inhibitorCoupling{0.1f};
-    float activatorCoupling{0.1f};
-    float inhibitorBaseProduction{0.1f};
-    float activatorBaseProduction{0.1f};
+    float activatorCoupling{0.5f};
+    float inhibitorBaseProduction{0.01f};
+    float activatorBaseProduction{0.01f};
 };
 
 void ui(Parameters& params) {
     ImGui::Begin("Test window");
 
-    ImGui::SliderFloat("time factor", &params.timeFactor, 0.01f, 5.0f);
-    ImGui::SliderFloat("diffusivity", &params.diffusivity, 0.01f, 5.0f);
-    ImGui::SliderFloat("activator base production", &params.activatorBaseProduction, 0.01f, 5.f);
+    ImGui::SliderFloat("time step", &params.timeStep, 0.01f, 1.0f);
+    ImGui::SliderFloat("time factor", &params.timeFactor, 0.01f, 0.3f);
+    ImGui::SliderFloat("inhibitor diffusivity", &params.inhibitorDiffusivity, 0.001f, 0.1f);
+    ImGui::SliderFloat("activator diffusivity", &params.activatorDiffusivity, 0.001f, 0.1f);
+    ImGui::SliderFloat("inhibitor base production", &params.inhibitorBaseProduction, 0.001f, 0.1f);
+    ImGui::SliderFloat("activator base production", &params.activatorBaseProduction, 0.001f, 0.1f);
+    ImGui::SliderFloat("inhibitor coupling", &params.inhibitorCoupling, 0.01f, 1.f);
+    ImGui::SliderFloat("activator coupling", &params.activatorCoupling, 0.01f, 1.f);
 
     ImGui::End();
 }
@@ -90,13 +102,7 @@ int main() {
     // these must be divisible by four
     const unsigned int resx = 900;
     const unsigned int resy = 1200;
-    const float diffusivity = 0.0016f;
     const float h = 0.01f;
-    const float inhCoupling = 0.1f;
-    const float actCoupling = 0.1f;
-    const float inhBaseProduction = 0.1f;
-    const float actBaseProduction = 0.1f;
-    const float timeFactor = 0.01f;
     /***
     *       ______           __
     *      / __/ /  ___ ____/ /__ _______
@@ -104,7 +110,7 @@ int main() {
     *    /___/_//_/\_,_/\_,_/\__/_/ /___/
     *
     */
-    narwhal::Program gridVisShader, clearShader, bulkShader, synchronizeShader;
+    narwhal::Program gridVisShader, clearShader, bulkShader, borderShader, synchronizeShader;
     {
         narwhal::DynamicArray<narwhal::Shader> shaders;
         shaders.emplaceBack(narwhal::fileToString("data/grid.vert.glsl"), GL_VERTEX_SHADER);
@@ -114,6 +120,10 @@ int main() {
 
         shaders.emplaceBack(narwhal::fileToString("data/bulk.comp.glsl"), GL_COMPUTE_SHADER);
         bulkShader.link(shaders);
+        shaders.clear();
+
+        shaders.emplaceBack(narwhal::fileToString("data/borders.comp.glsl"), GL_COMPUTE_SHADER);
+        borderShader.link(shaders);
         shaders.clear();
 
         shaders.emplaceBack(narwhal::fileToString("data/synchronize.comp.glsl"), GL_COMPUTE_SHADER);
@@ -147,12 +157,19 @@ int main() {
         }
         indexBuffer.dataStore(indices.size()*3, sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
 
-        float max = float(m*n - 1);
+        float radius = 0.1f*h*resy;
+        float x0 = 0.5f*h*resx;
+        float y0 = 0.5f*h*resy;
         narwhal::DynamicArray<Vec4f> rdGrid(m*n);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < m; ++j) {
-                float scalar = float(i*m + j);
-                rdGrid.pushBack(Vec4f{h*j, h*i, scalar / max, scalar / max });
+                float x = h*j;
+                float y = h*i;
+                float scalar = 0.01f;
+                if ((x - x0)*(x - x0) + (y - y0)*(y - y0) < radius*radius) {
+                    scalar = 0.9f;
+                }
+                rdGrid.pushBack(Vec4f{h*j, h*i, scalar, scalar });
             }
         }
         rdBuffer.dataStore(rdGrid.size(), sizeof(Vec4f), rdGrid.data(), GL_DYNAMIC_COPY);
@@ -217,17 +234,25 @@ int main() {
         glBindImageTexture(2, rdTexturePrevious.object(), 0, GL_TRUE, 0, GL_READ_ONLY, GL_RGBA32F);
         glUniform1i(3, resx);
         glUniform1i(4, resy);
-        glUniform1f(5, params.diffusivity);
-        glUniform1f(6, h);
-        glUniform1f(7, 0.1f);
-        glUniform1f(8, inhCoupling);
-        glUniform1f(9, actCoupling);
-        glUniform1f(10, inhBaseProduction);
-        glUniform1f(11, params.activatorBaseProduction);
-        glUniform1f(12, params.timeFactor);
+        glUniform1f(5, params.inhibitorDiffusivity);
+        glUniform1f(6, params.activatorDiffusivity);
+        glUniform1f(7, h);
+        glUniform1f(8, params.timeStep);
+        glUniform1f(9, params.inhibitorCoupling);
+        glUniform1f(10, params.activatorCoupling);
+        glUniform1f(11, params.inhibitorBaseProduction);
+        glUniform1f(12, params.activatorBaseProduction);
+        glUniform1f(13, params.timeFactor);
 
         glDispatchCompute(numLocalGroupsX, numLocalGroupsY, 1);
         bulkShader.stopUsing();
+
+        borderShader.use();
+        glBindImageTexture(1, rdTexture.object(), 0, GL_TRUE, 0, GL_READ_WRITE, GL_RGBA32F);
+        glUniform1i(3, resx);
+        glUniform1i(4, resy);
+        glDispatchCompute(numLocalGroupsX, numLocalGroupsY, 1);
+        borderShader.stopUsing();
 
         //glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
